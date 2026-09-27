@@ -816,7 +816,6 @@ async function loadProjects() {
       .eq("user_id", user.value.id)
       .order("updated_at", { ascending: false });
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
     projects.value = data ?? [];
   } catch (error) {
     console.error("Failed to load projects:", error);
@@ -825,100 +824,113 @@ async function loadProjects() {
   }
 }
 
+const isSaving = ref(false);
+
 async function saveProject() {
   if (!user.value) return;
+  isSaving.value = true;
+  try {
+    if (currentProjectId.value) {
+      await supabase
+        .from("projects")
+        .update({
+          name: currentProjectName.value,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", currentProjectId.value)
+        .eq("user_id", user.value.id);
+    } else {
+      const { data, error } = await supabase
+        .from("projects")
+        .insert({
+          user_id: user.value.id,
+          name: currentProjectName.value,
+          folder_id: currentFolderId.value,
+        })
+        .select()
+        .single();
 
-  if (currentProjectId.value) {
-    await supabase
-      .from("projects")
-      .update({
-        name: currentProjectName.value,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", currentProjectId.value)
-      .eq("user_id", user.value.id);
-  } else {
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({
-        user_id: user.value.id,
-        name: currentProjectName.value,
-        folder_id: currentFolderId.value,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error(error);
-      return;
+      if (error) {
+        throw error;
+      }
+      currentProjectId.value = data.id;
     }
-    currentProjectId.value = data.id;
-  }
 
-  const currentFilenames = openFiles.value.map((f) => f.filename);
-  const removedFilenames = originalFilenames.value.filter(
-    (f) => !currentFilenames.includes(f),
-  );
+    const currentFilenames = openFiles.value.map((f) => f.filename);
+    const removedFilenames = originalFilenames.value.filter(
+      (f) => !currentFilenames.includes(f),
+    );
 
-  if (removedFilenames.length > 0) {
-    await supabase
+    if (removedFilenames.length > 0) {
+      await supabase
+        .from("project_files")
+        .delete()
+        .eq("project_id", currentProjectId.value)
+        .in("filename", removedFilenames);
+    }
+
+    const rows = openFiles.value.map((f) => ({
+      project_id: currentProjectId.value,
+      filename: f.filename,
+      content: f.content,
+    }));
+
+    const { error: fileError } = await supabase
       .from("project_files")
-      .delete()
-      .eq("project_id", currentProjectId.value)
-      .in("filename", removedFilenames);
+      .upsert(rows, { onConflict: "project_id,filename" });
+
+    if (fileError) throw fileError;
+
+    originalFilenames.value = currentFilenames;
+    await loadProjects();
+  } catch (error) {
+    msg.value = JSON.stringify(error);
+    alert();
+  } finally {
+    isSaving.value = false;
   }
-
-  const rows = openFiles.value.map((f) => ({
-    project_id: currentProjectId.value,
-    filename: f.filename,
-    content: f.content,
-  }));
-
-  const { error: fileError } = await supabase
-    .from("project_files")
-    .upsert(rows, { onConflict: "project_id,filename" });
-
-  if (fileError) console.error(fileError);
-
-  originalFilenames.value = currentFilenames;
-  await loadProjects();
 }
 
 async function openProject(projectId: string) {
   if (!user.value) return;
 
-  const { data: proj, error: projError } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .eq("user_id", user.value.id)
-    .single();
+  try {
+    const { data: proj, error: projError } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .eq("user_id", user.value.id)
+      .single();
 
-  if (projError) {
-    console.error(projError);
-    return;
+    if (projError) {
+      throw projError;
+    }
+
+    const { data: files, error: fileError } = await supabase
+      .from("project_files")
+      .select("id, filename, content")
+      .eq("project_id", projectId);
+
+    if (fileError) {
+      throw fileError;
+    }
+
+    currentProjectId.value = proj.id;
+    currentProjectName.value = proj.name;
+
+    openFiles.value =
+      files && files.length > 0
+        ? files
+        : [{ id: crypto.randomUUID(), filename: "sketch.ino", content: "" }];
+
+    originalFilenames.value = openFiles.value.map((f) => f.filename);
+    activeFileIndex.value = 0;
+
+    localStorage.setItem("lastProjectId", projectId);
+  } catch (error) {
+    msg.value = JSON.stringify(error);
+    alert();
   }
-
-  const { data: files, error: fileError } = await supabase
-    .from("project_files")
-    .select("id, filename, content")
-    .eq("project_id", projectId);
-
-  if (fileError) {
-    console.error(fileError);
-    return;
-  }
-
-  currentProjectId.value = proj.id;
-  currentProjectName.value = proj.name;
-
-  openFiles.value =
-    files && files.length > 0
-      ? files
-      : [{ id: crypto.randomUUID(), filename: "sketch.ino", content: "" }];
-
-  originalFilenames.value = openFiles.value.map((f) => f.filename);
-  activeFileIndex.value = 0;
 }
 
 async function deleteProject(projectId: string) {
@@ -944,7 +956,8 @@ async function deleteProject(projectId: string) {
     await loadProjects();
   } catch (error) {
     console.error("Failed to delete project:", error);
-    return;
+    msg.value = "Failed to delete project: " + JSON.stringify(error);
+    alert();
   }
 }
 
@@ -1265,9 +1278,17 @@ function handleKeyboardShortcuts(event: KeyboardEvent) {
     klos();
   }
 
-  if (event.key === "Enter") {
-    event.preventDefault();
-    submitt();
+  if (
+    showConfCreate.value == true ||
+    showConfDelete.value == true ||
+    isCreateFileOpen.value == true
+  ) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitt();
+    }
+  } else {
+    return;
   }
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
@@ -1307,12 +1328,16 @@ watch(
   { immediate: true },
 );
 
+
 // ============================================================
 // LIFECYCLE
 // ============================================================
+const colorr = "#ff4400";
 onMounted(() => {
   if (session.value) {
     console.log("User is logged in");
+    const lastId = localStorage.getItem("lastProjectId");
+    if (lastId) openProject(lastId);
   } else {
     console.log("No active session");
   }
@@ -1690,7 +1715,7 @@ onMounted(() => {
       :class="
         isCreateFileOpen ? '-translate-y-[100px]' : '-translate-y-[700px]'
       "
-      class="w-110 h-fit rounded-lg border border-[#020202] absolute z-99 bg-[#121212] left-1/2 bottom-50 -translate-x-1/2 shadow-lg flex flex-col justify-start items-start px-3 py-2 transition-all duration-500 ease gap-2"
+      class="w-110 h-fit rounded-lg border border-[#020202] absolute z-99 bg-[#121212] left-1/2 bottom-50 -translate-x-1/2 shadow-lg flex flex-col justify-start items-start px-3 py-4 transition-all duration-500 ease gap-2"
     >
       <h1 class="text-lg font-semibold whitespace-nowrap flex flex-col">
         Create New File
@@ -1698,16 +1723,16 @@ onMounted(() => {
           Filename (e.g. helper.h or sensor.cpp)
         </span>
       </h1>
-      <div class="flex flex-row w-full h-fit px-1 py-2 gap-1">
+      <div class="flex flex-row w-full h-fit py-2 gap-1">
         <input
           type="text"
           v-model="newFileName"
           placeholder="Enter File Name"
-          class="w-80 bg-[#1a1a1a] h-10 border border-[#323232] rounded-lg px-3 py-2 text-sm outline-none focus:border-[#ff4400]"
+          class="w-[80%] bg-[#1a1a1a] h-10 border border-[#323232] rounded-lg px-3 py-2 text-sm outline-none focus:border-[#ff4400]"
         />
         <select
           v-model="ext"
-          class="rounded border hover:border-[#ff4400] transition-all duration-300 ease border-[#323232] bg-[#121212] px-3 py-2 text-sm text-white outline-none focus:outline-none focus:ring-0 cursor-pointer"
+          class="rounded w-[20%] border hover:border-[#ff4400] transition-all duration-300 ease border-[#323232] bg-[#121212] px-3 py-2 text-sm text-white outline-none focus:outline-none focus:ring-0 cursor-pointer"
         >
           <option value=".ino">.ino</option>
           <option value=".cpp">.cpp</option>
@@ -2048,15 +2073,41 @@ onMounted(() => {
 
           <div class="h-5 w-px bg-gray-700 mx-1"></div>
           <button
+            v-if="isSaving"
+            class="rounded-full px-1 text-[#5e5e5e] text-sm font-medium disabled:cursor-not-allowed hover:text-[#ff4400] cursor-pointer transition-all duration-300 ease flex justify-center items-center"
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 50 50"
+              class="animate-spin"
+            >
+              <circle
+                cx="25"
+                cy="25"
+                :r="radius"
+                fill="none"
+                :stroke="colorr"
+                :stroke-width="7"
+                stroke-linecap="round"
+                :stroke-dasharray="circumference"
+                :stroke-dashoffset="circumference * 0.75"
+              />
+            </svg>
+          </button>
+          <button
+            v-else
             @click="saveProject"
-            :disabled="compiling || uploading || !selectedBoard"
+            :disabled="compiling || uploading"
+            title="Save Project"
             class="rounded-full text-[#5e5e5e] text-sm font-medium disabled:cursor-not-allowed hover:text-[#ff4400] cursor-pointer transition-all duration-300 ease flex justify-center items-center"
           >
             <span class="material-symbols-outlined !text-[25px]"> save </span>
           </button>
           <button
             @click="saveProjectToPC"
-            :disabled="compiling || uploading || !selectedBoard"
+            :disabled="compiling || uploading"
+            title="Download Project"
             class="rounded-full text-[#5e5e5e] text-sm font-medium disabled:cursor-not-allowed hover:text-[#ff4400] cursor-pointer transition-all duration-300 ease flex justify-center items-center"
           >
             <span class="material-symbols-outlined !text-[25px]">
@@ -2065,7 +2116,8 @@ onMounted(() => {
           </button>
           <button
             @click="compileCode"
-            :disabled="uploading || compiling || !selectedBoard"
+            :disabled="uploading || compiling"
+            title="Compile"
             class="rounded-full text-[#5e5e5e] text-sm font-medium disabled:cursor-not-allowed hover:text-[#ff4400] cursor-pointer transition-all duration-300 ease flex justify-center items-center"
           >
             <span class="material-symbols-outlined !text-[25px]"> build </span>
@@ -2073,6 +2125,7 @@ onMounted(() => {
           <button
             @click="uploadCode"
             :disabled="compiling || uploading || !selectedBoard"
+            title="Upload"
             class="rounded-full text-[#5e5e5e] text-sm font-medium disabled:cursor-not-allowed hover:text-[#ff4400] cursor-pointer transition-all duration-300 ease flex justify-center items-center"
           >
             <span class="material-symbols-outlined !text-[25px]"> start </span>
@@ -2159,7 +2212,7 @@ onMounted(() => {
 
         <div class="h-full flex flex-col">
           <div
-            class="flex flex-row w-full justify-between items-center h-4 mb-2 shrink-0"
+            class="flex flex-row w-full justify-between items-center h-7 mb-2 shrink-0"
           >
             <select
               v-model="selectOutput"
