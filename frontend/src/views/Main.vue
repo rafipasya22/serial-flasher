@@ -390,13 +390,11 @@ async function loadLocalFile(event: Event) {
       );
       if (!confirmed) return;
 
-      // remove existing .ino before adding new one
       openFiles.value = openFiles.value.filter(
         (f) => !f.filename.toLowerCase().endsWith(".ino"),
       );
     }
 
-    // replace if same filename exists, else add new
     const existingIndex = openFiles.value.findIndex(
       (f) => f.filename.toLowerCase() === lower,
     );
