@@ -122,7 +122,7 @@ const MIN_HEIGHT = 110;
 const MAX_HEIGHT = 300;
 const height = ref(MIN_HEIGHT);
 
-function startResize(e: MouseEvent) {
+function startResize() {
   if (!box.value) return;
 
   const rect = box.value.getBoundingClientRect();
@@ -222,7 +222,6 @@ function addFile() {
   const joined = newFileName.value + ext.value;
   const trimmed = joined.trim();
   const lower = trimmed.toLowerCase();
-  const validExt = [".ino", ".h", ".hpp", ".cpp"];
   isCreatingFile.value = true;
 
   try {
@@ -1328,7 +1327,6 @@ watch(
   { immediate: true },
 );
 
-
 // ============================================================
 // LIFECYCLE
 // ============================================================
@@ -1428,7 +1426,7 @@ onMounted(() => {
               <img
                 v-else
                 class="w-full h-full rounded-full object-cover"
-                src="C:\Users\Asus\Documents\Proj\frontend\src\assets\user.png"
+                src="../assets/user.png"
                 alt=""
               />
               <button

@@ -12,6 +12,7 @@
     "@supabase/supabase-js": "^2.116.0",
     "@tailwindcss/vite": "^4.3.3",
     "blockly": "^13.3.0",
+    "esptool-js": "^0.7.0",
     "monaco": "^1.201704190613.0",
     "monaco-editor": "^0.56.0",
     "monaco-editor-themes": "^1.0.0",
